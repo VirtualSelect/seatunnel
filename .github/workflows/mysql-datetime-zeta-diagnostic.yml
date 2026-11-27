@@ -1,0 +1,71 @@
+name: MySQL DATETIME Zeta diagnostic
+on:
+  push:
+    branches: [diagnostics-seatunnel-13445-zeta]
+permissions:
+  contents: read
+jobs:
+  zeta:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      RUN_ENGINES: zeta
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      MAVEN_OPTS: -Xmx4096m
+      EXPECTED_SHA: 46bcec90e321cf2da6d18276fb107b76164b2668
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 46bcec90e321cf2da6d18276fb107b76164b2668
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify checkout and runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse HEAD
+          java -version
+          docker version
+      - name: Run the DATETIME regression
+        timeout-minutes: 160
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./mvnw -B -T 1 verify -Pci -pl :connector-cdc-mysql-e2e -am \
+            -DskipUT=true -DskipIT=false -Dlicense.skipAddThirdParty=true \
+            -Dskip.ui=true --no-snapshot-updates \
+            '-Dit.test=MysqlCDCWithSchemaChangeIT#testMysqlCdcWithSetEnumAndDatetimeColumnSchemaChange' \
+            -Dit.failIfNoSpecifiedTests=false 2>&1 | tee datetime-zeta.log
+      - name: Require the named passing test
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'MysqlCDCWithSchemaChangeIT.testMysqlCdcWithSetEnumAndDatetimeColumnSchemaChange successfully run.' datetime-zeta.log
+          python3 - <<'PY'
+          import pathlib
+          import xml.etree.ElementTree as ET
+          
+          method = "testMysqlCdcWithSetEnumAndDatetimeColumnSchemaChange"
+          reports = pathlib.Path("seatunnel-e2e/seatunnel-connector-v2-e2e/connector-cdc-mysql-e2e/target/failsafe-reports")
+          cases = []
+          for report in reports.glob("TEST-*.xml"):
+              cases.extend(ET.parse(report).getroot().iter("testcase"))
+          assert len(cases) == 1, [(case.get("classname"), case.get("name")) for case in cases]
+          case = cases[0]
+          assert case.get("classname", "").endswith(".MysqlCDCWithSchemaChangeIT"), case.attrib
+          assert case.get("name", "").startswith(method), case.attrib
+          assert all(case.find(tag) is None for tag in ("failure", "error", "skipped")), case.attrib
+          print("Passing DATETIME invocation:", case.attrib)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: seatunnel-13445-zeta-jdk17
+          retention-days: 7
+          path: |
+            datetime-zeta.log
+            seatunnel-e2e/seatunnel-connector-v2-e2e/connector-cdc-mysql-e2e/target/failsafe-reports/TEST-*.xml
