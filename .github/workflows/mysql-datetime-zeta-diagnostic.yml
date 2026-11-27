@@ -1,3 +1,4 @@
+# Isolated diagnostic for the SeaTunnel DATETIME regression.
 name: MySQL DATETIME Zeta diagnostic
 on:
   push:
